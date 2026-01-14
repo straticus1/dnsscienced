@@ -1,0 +1,4 @@
+[submodule "tools/adsdnsgo"]
+	path = tools/adsdnsgo
+	url = https://github.com/afterdarksystems/adsdnsgo.git
+	branch = main

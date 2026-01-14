@@ -1,0 +1,14 @@
+1. Fully featured, DNS Server written in Go
+2. Advanced logging, query loggings
+3. DDOS mitigations detection and response techniques
+4. Fine tuning of DNS Server,down to protocol features, advanced features, and experimental DNS
+5. Full support for integration with the dnsscience.io platform for threat intelligence feeds and anonymous analytics submission, all configurable
+6. Data sharing levels with dnsscience.io configurable.
+7. Support plugins
+8. Init scripts, daemon,cli tools, dns debugging tools
+9. dnsscience client written in go, study ~/development/dnsscience.io/
+10. check out ~/development/adsdnsgo/
+11. lets write it in go
+12. modules support, so we can make plugins
+
+
