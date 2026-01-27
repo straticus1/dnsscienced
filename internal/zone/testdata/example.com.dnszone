@@ -1,0 +1,77 @@
+# Example zone file in .dnszone format
+zone:
+  name: example.com
+  ttl: 1h
+  class: IN
+  comment: "Primary zone for example.com"
+
+soa:
+  primary_ns: ns1.example.com
+  contact: admin@example.com
+  serial: auto
+  refresh: 2h
+  retry: 1h
+  expire: 2w
+  negative_ttl: 1h
+
+records:
+  # Apex records
+  "@":
+    NS:
+      - ns1.example.com
+      - ns2.example.com
+    MX:
+      - priority: 10
+        target: mail1.example.com
+      - priority: 20
+        target: mail2.example.com
+    TXT: "v=spf1 mx -all"
+    A: 192.0.2.1
+    AAAA: 2001:db8::1
+
+  # Web servers
+  www:
+    A:
+      - 192.0.2.10
+      - 192.0.2.11
+    AAAA: 2001:db8::10
+
+  # Mail servers
+  mail1:
+    A: 192.0.2.20
+    AAAA: 2001:db8::20
+
+  mail2:
+    A: 192.0.2.21
+    ttl: 7200
+
+  # Nameserver glue records
+  ns1:
+    A: 192.0.2.53
+    AAAA: 2001:db8::53
+
+  ns2:
+    A: 198.51.100.53
+
+  # Wildcard
+  "*":
+    A: 192.0.2.100
+
+  # Service records
+  _dmarc:
+    TXT: "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+
+  _sip._tcp:
+    SRV:
+      - priority: 10
+        weight: 60
+        port: 5060
+        target: sip1.example.com
+      - priority: 10
+        weight: 40
+        port: 5060
+        target: sip2.example.com
+
+  # CNAME example
+  ftp:
+    CNAME: www.example.com
