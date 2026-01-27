@@ -260,8 +260,6 @@ func (c *ShardedCache) cleanupExpired() {
 
 // performCleanup removes expired entries from all shards
 func (c *ShardedCache) performCleanup() {
-	now := time.Now()
-
 	for _, shard := range c.shards {
 		shard.mu.Lock()
 
