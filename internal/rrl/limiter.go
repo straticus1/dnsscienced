@@ -1,0 +1,384 @@
+package rrl
+
+import (
+	"hash/fnv"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Response Rate Limiting (RRL) prevents DNS amplification attacks
+// by limiting response rates to clients making suspicious queries.
+//
+// Algorithm: Token bucket per (client-IP, query-type, response-type) tuple
+// Based on BIND 9's implementation and ISC recommendations
+
+const (
+	// Default limits per ISC recommendations
+	DefaultResponsesPerSecond = 5
+	DefaultErrorsPerSecond    = 5
+	DefaultNXDOMAINsPerSecond = 5
+	DefaultWindow             = 15 // seconds
+	DefaultSlip               = 2  // 1 in N responses get TC bit
+
+	// Response categories for rate limiting
+	CategoryResponse = iota
+	CategoryError
+	CategoryNXDOMAIN
+	CategoryReferral
+	CategoryNodata
+	CategoryAll
+)
+
+// Config holds RRL configuration
+type Config struct {
+	// Per-category limits (queries per second)
+	ResponsesPerSecond int
+	ErrorsPerSecond    int
+	NXDOMAINsPerSecond int
+	ReferralsPerSecond int
+	NodataPerSecond    int
+	AllPerSecond       int // Global limit across all categories
+
+	// Window for rate calculation (seconds)
+	Window int
+
+	// Slip: 1 in N limited responses get TC bit instead of drop
+	// slip=0: drop all, slip=1: TC all, slip=2: TC 50%
+	Slip int
+
+	// Exempt prefixes (no rate limiting)
+	ExemptPrefixes []*net.IPNet
+
+	// IPv4 and IPv6 prefix lengths for bucketing
+	IPv4PrefixLen int // Default: 24
+	IPv6PrefixLen int // Default: 56
+
+	// Enable/disable
+	Enabled bool
+}
+
+// DefaultConfig returns recommended RRL configuration
+func DefaultConfig() Config {
+	return Config{
+		ResponsesPerSecond: DefaultResponsesPerSecond,
+		ErrorsPerSecond:    DefaultErrorsPerSecond,
+		NXDOMAINsPerSecond: DefaultNXDOMAINsPerSecond,
+		ReferralsPerSecond: 5,
+		NodataPerSecond:    5,
+		AllPerSecond:       100,
+		Window:             DefaultWindow,
+		Slip:               DefaultSlip,
+		IPv4PrefixLen:      24,
+		IPv6PrefixLen:      56,
+		Enabled:            true,
+	}
+}
+
+// Action represents what to do with a query
+type Action int
+
+const (
+	ActionAllow Action = iota // Allow response
+	ActionDrop                // Drop response (silent)
+	ActionSlip                // Respond with TC bit
+)
+
+func (a Action) String() string {
+	switch a {
+	case ActionAllow:
+		return "allow"
+	case ActionDrop:
+		return "drop"
+	case ActionSlip:
+		return "slip"
+	default:
+		return "unknown"
+	}
+}
+
+// bucket tracks rate for a specific (client, qname, qtype) tuple
+type bucket struct {
+	tokens    int32
+	lastCheck int64 // Unix timestamp
+}
+
+// Limiter implements Response Rate Limiting
+type Limiter struct {
+	cfg Config
+
+	// Buckets: map[hash]*bucket
+	// Hash = fnv(client-prefix || qname || qtype || category)
+	buckets sync.Map
+
+	// Statistics
+	allowed atomic.Uint64
+	dropped atomic.Uint64
+	slipped atomic.Uint64
+
+	// Cleanup
+	stopCleanup chan struct{}
+	cleanupDone sync.WaitGroup
+}
+
+// NewLimiter creates a new RRL limiter
+func NewLimiter(cfg Config) *Limiter {
+	if cfg.Window == 0 {
+		cfg.Window = DefaultWindow
+	}
+	if cfg.Slip == 0 {
+		cfg.Slip = DefaultSlip
+	}
+
+	l := &Limiter{
+		cfg:         cfg,
+		stopCleanup: make(chan struct{}),
+	}
+
+	// Start background cleanup
+	l.cleanupDone.Add(1)
+	go l.cleanup()
+
+	return l
+}
+
+// Check checks if a response should be rate limited
+func (l *Limiter) Check(clientIP net.IP, qname string, qtype uint16, category int) Action {
+	if !l.cfg.Enabled {
+		l.allowed.Add(1)
+		return ActionAllow
+	}
+
+	// Check if client is exempt
+	if l.isExempt(clientIP) {
+		l.allowed.Add(1)
+		return ActionAllow
+	}
+
+	// Get rate limit for this category
+	limit := l.getLimitForCategory(category)
+	if limit == 0 {
+		l.allowed.Add(1)
+		return ActionAllow // No limit for this category
+	}
+
+	// Calculate bucket hash
+	hash := l.bucketHash(clientIP, qname, qtype, category)
+
+	// Get or create bucket
+	now := time.Now().Unix()
+	bucketInterface, _ := l.buckets.LoadOrStore(hash, &bucket{
+		tokens:    int32(limit * l.cfg.Window),
+		lastCheck: now,
+	})
+	b := bucketInterface.(*bucket)
+
+	// Refill tokens based on elapsed time (token bucket algorithm)
+	lastCheck := atomic.LoadInt64(&b.lastCheck)
+	elapsed := now - lastCheck
+
+	if elapsed > 0 {
+		// Refill tokens: (elapsed seconds) * (tokens per second)
+		refill := int32(elapsed * int64(limit))
+		maxTokens := int32(limit * l.cfg.Window)
+
+		// Add tokens, capped at max
+		currentTokens := atomic.LoadInt32(&b.tokens)
+		newTokens := currentTokens + refill
+		if newTokens > maxTokens {
+			newTokens = maxTokens
+		}
+
+		atomic.StoreInt32(&b.tokens, newTokens)
+		atomic.StoreInt64(&b.lastCheck, now)
+	}
+
+	// Try to consume a token
+	tokens := atomic.AddInt32(&b.tokens, -1)
+
+	if tokens >= 0 {
+		// Token available - allow
+		l.allowed.Add(1)
+		return ActionAllow
+	}
+
+	// No tokens - rate limited!
+	// Restore the token we tried to consume
+	atomic.AddInt32(&b.tokens, 1)
+
+	// Apply slip: 1 in N get TC bit, rest are dropped
+	if l.cfg.Slip > 0 && (hash%uint64(l.cfg.Slip)) == 0 {
+		l.slipped.Add(1)
+		return ActionSlip
+	}
+
+	l.dropped.Add(1)
+	return ActionDrop
+}
+
+// isExempt checks if client IP is in exempt list
+func (l *Limiter) isExempt(ip net.IP) bool {
+	for _, prefix := range l.cfg.ExemptPrefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// getLimitForCategory returns rate limit for a category
+func (l *Limiter) getLimitForCategory(category int) int {
+	switch category {
+	case CategoryResponse:
+		return l.cfg.ResponsesPerSecond
+	case CategoryError:
+		return l.cfg.ErrorsPerSecond
+	case CategoryNXDOMAIN:
+		return l.cfg.NXDOMAINsPerSecond
+	case CategoryReferral:
+		return l.cfg.ReferralsPerSecond
+	case CategoryNodata:
+		return l.cfg.NodataPerSecond
+	case CategoryAll:
+		return l.cfg.AllPerSecond
+	default:
+		return l.cfg.AllPerSecond
+	}
+}
+
+// bucketHash creates a hash for bucket identification
+// Hash includes: client prefix + qname + qtype + category
+func (l *Limiter) bucketHash(ip net.IP, qname string, qtype uint16, category int) uint64 {
+	h := fnv.New64a()
+
+	// Write client prefix (not full IP for privacy/efficiency)
+	prefix := l.getPrefix(ip)
+	h.Write(prefix)
+
+	// Write query name
+	h.Write([]byte(qname))
+
+	// Write query type and category
+	var buf [4]byte
+	buf[0] = byte(qtype >> 8)
+	buf[1] = byte(qtype)
+	buf[2] = byte(category >> 8)
+	buf[3] = byte(category)
+	h.Write(buf[:])
+
+	return h.Sum64()
+}
+
+// getPrefix returns the prefix of an IP for bucketing
+func (l *Limiter) getPrefix(ip net.IP) []byte {
+	ip = ip.To4()
+	if ip != nil {
+		// IPv4: use /24 prefix (default)
+		prefixLen := l.cfg.IPv4PrefixLen
+		if prefixLen == 0 {
+			prefixLen = 24
+		}
+		mask := net.CIDRMask(prefixLen, 32)
+		return ip.Mask(mask)
+	}
+
+	// IPv6: use /56 prefix (default)
+	ip = ip.To16()
+	prefixLen := l.cfg.IPv6PrefixLen
+	if prefixLen == 0 {
+		prefixLen = 56
+	}
+	mask := net.CIDRMask(prefixLen, 128)
+	return ip.Mask(mask)
+}
+
+// cleanup periodically removes expired buckets
+func (l *Limiter) cleanup() {
+	defer l.cleanupDone.Done()
+
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			l.performCleanup()
+		case <-l.stopCleanup:
+			return
+		}
+	}
+}
+
+// performCleanup removes old buckets
+func (l *Limiter) performCleanup() {
+	now := time.Now().Unix()
+	cutoff := now - int64(l.cfg.Window*2) // Keep buckets for 2x window
+
+	l.buckets.Range(func(key, value interface{}) bool {
+		b := value.(*bucket)
+		lastCheck := atomic.LoadInt64(&b.lastCheck)
+
+		if lastCheck < cutoff {
+			l.buckets.Delete(key)
+		}
+
+		return true
+	})
+}
+
+// Close stops background goroutines
+func (l *Limiter) Close() {
+	close(l.stopCleanup)
+	l.cleanupDone.Wait()
+}
+
+// Stats returns RRL statistics
+type Stats struct {
+	Allowed uint64
+	Dropped uint64
+	Slipped uint64
+	Total   uint64
+	DropRate float64
+}
+
+// GetStats returns current RRL statistics
+func (l *Limiter) GetStats() Stats {
+	allowed := l.allowed.Load()
+	dropped := l.dropped.Load()
+	slipped := l.slipped.Load()
+	total := allowed + dropped + slipped
+
+	var dropRate float64
+	if total > 0 {
+		dropRate = float64(dropped) / float64(total)
+	}
+
+	return Stats{
+		Allowed:  allowed,
+		Dropped:  dropped,
+		Slipped:  slipped,
+		Total:    total,
+		DropRate: dropRate,
+	}
+}
+
+// CategorizeResponse determines the RRL category for a response
+func CategorizeResponse(rcode int, answerCount, nsCount int) int {
+	switch rcode {
+	case 0: // NOERROR
+		if answerCount > 0 {
+			return CategoryResponse
+		}
+		if nsCount > 0 {
+			return CategoryReferral
+		}
+		return CategoryNodata
+
+	case 3: // NXDOMAIN
+		return CategoryNXDOMAIN
+
+	default: // SERVFAIL, FORMERR, etc.
+		return CategoryError
+	}
+}
