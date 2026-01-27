@@ -1,0 +1,311 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// DNSSECService manages DNSSEC operations
+service DNSSECService {
+  // GetStatus returns DNSSEC status for a zone
+  rpc GetStatus(DNSSECStatusRequest) returns (DNSSECStatusResponse);
+  
+  // Sign re-signs a zone
+  rpc Sign(SignZoneRequest) returns (SignZoneResponse);
+  
+  // Rollover initiates key rollover
+  rpc Rollover(RolloverRequest) returns (RolloverResponse);
+  
+  // GetDS returns DS records for parent delegation
+  rpc GetDS(GetDSRequest) returns (GetDSResponse);
+  
+  // GenerateKey generates a new DNSSEC key
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+  
+  // ImportKey imports an existing DNSSEC key
+  rpc ImportKey(ImportKeyRequest) returns (ImportKeyResponse);
+  
+  // ExportKey exports a DNSSEC key
+  rpc ExportKey(ExportKeyRequest) returns (ExportKeyResponse);
+  
+  // DeleteKey deletes a DNSSEC key
+  rpc DeleteKey(DeleteKeyRequest) returns (DeleteKeyResponse);
+  
+  // ValidateChain validates the DNSSEC chain
+  rpc ValidateChain(ValidateChainRequest) returns (ValidateChainResponse);
+  
+  // WatchKeys streams DNSSEC key events
+  rpc WatchKeys(WatchKeysRequest) returns (stream DNSSECEvent);
+}
+
+// DNSSEC Algorithm enumeration
+enum DNSSECAlgorithm {
+  DNSSEC_ALGORITHM_UNSPECIFIED = 0;
+  DNSSEC_ALGORITHM_RSASHA256 = 8;
+  DNSSEC_ALGORITHM_RSASHA512 = 10;
+  DNSSEC_ALGORITHM_ECDSAP256SHA256 = 13;
+  DNSSEC_ALGORITHM_ECDSAP384SHA384 = 14;
+  DNSSEC_ALGORITHM_ED25519 = 15;
+  DNSSEC_ALGORITHM_ED448 = 16;
+}
+
+// Key type enumeration
+enum KeyType {
+  KEY_TYPE_UNSPECIFIED = 0;
+  KEY_TYPE_KSK = 1;  // Key Signing Key
+  KEY_TYPE_ZSK = 2;  // Zone Signing Key
+}
+
+// Key status
+enum KeyStatus {
+  KEY_STATUS_UNSPECIFIED = 0;
+  KEY_STATUS_ACTIVE = 1;
+  KEY_STATUS_PUBLISHED = 2;
+  KEY_STATUS_RETIRED = 3;
+  KEY_STATUS_REVOKED = 4;
+  KEY_STATUS_DELETED = 5;
+}
+
+// DNSSECKey represents a DNSSEC key
+message DNSSECKey {
+  string id = 1;  // Key tag or unique identifier
+  uint32 key_tag = 2;
+  KeyType type = 3;
+  DNSSECAlgorithm algorithm = 4;
+  KeyStatus status = 5;
+  
+  google.protobuf.Timestamp created = 6;
+  google.protobuf.Timestamp activated = 7;
+  google.protobuf.Timestamp inactivated = 8;
+  google.protobuf.Timestamp deleted = 9;
+  google.protobuf.Timestamp expires = 10;
+  
+  string public_key = 11;  // Base64 encoded
+  bool has_private_key = 12;
+  
+  // DS records
+  repeated DSRecord ds_records = 13;
+  
+  // Key generation parameters
+  int32 key_size = 14;  // For RSA keys
+}
+
+// DS Record
+message DSRecord {
+  uint32 key_tag = 1;
+  DNSSECAlgorithm algorithm = 2;
+  uint32 digest_type = 3;  // 1=SHA-1, 2=SHA-256, 4=SHA-384
+  string digest = 4;  // Hex encoded
+  string record = 5;  // Full DS record string
+}
+
+// Tri-state include mode for public key material
+// OFF: never include; MAY: include if available and small enough; ON: include if available
+enum IncludeKeyMode {
+  INCLUDE_KEY_MODE_UNSPECIFIED = 0;
+  INCLUDE_KEY_MODE_OFF = 1;
+  INCLUDE_KEY_MODE_MAY = 2;
+  INCLUDE_KEY_MODE_ON = 3;
+}
+
+// DNSSECStatusRequest
+message DNSSECStatusRequest {
+  string zone_name = 1;
+  IncludeKeyMode include_public_key_mode = 2; // default server-side: MAY
+}
+
+// DNSSECStatusResponse
+message DNSSECStatusResponse {
+  string zone_name = 1;
+  bool enabled = 2;
+  bool signed = 3;
+  DNSSECAlgorithm algorithm = 4;
+  
+  repeated DNSSECKey keys = 5;
+  
+  // Validation status
+  google.protobuf.Timestamp last_validation = 6;
+  bool chain_valid = 7;
+  bool signatures_valid = 8;
+  bool expiring_soon = 9;
+  
+  repeated string validation_errors = 10;
+  
+  ResponseMeta meta = 11;
+}
+
+// SignZoneRequest
+message SignZoneRequest {
+  string zone_name = 1;
+  bool increment_serial = 2;  // Auto-increment zone serial
+  bool resign_all = 3;  // Re-sign all existing signatures
+}
+
+// SignZoneResponse
+message SignZoneResponse {
+  string zone_name = 1;
+  bool success = 2;
+  uint32 old_serial = 3;
+  uint32 new_serial = 4;
+  int32 signatures_created = 5;
+  int32 signatures_updated = 6;
+  google.protobuf.Duration duration = 7;
+  repeated string errors = 8;
+  ResponseMeta meta = 9;
+}
+
+// RolloverRequest
+message RolloverRequest {
+  string zone_name = 1;
+  KeyType key_type = 2;  // ksk or zsk
+  DNSSECAlgorithm new_algorithm = 3;  // Optional: change algorithm
+  int32 key_size = 4;  // Optional: for RSA keys
+}
+
+// RolloverResponse with timeline
+message RolloverResponse {
+  string zone_name = 1;
+  KeyType key_type = 2;
+  string status = 3;  // initiated, in_progress, completed
+  
+  DNSSECKey old_key = 4;
+  DNSSECKey new_key = 5;
+  
+  message RolloverPhase {
+    string phase = 1;  // publish, activate, retire_old, delete_old
+    google.protobuf.Timestamp scheduled_date = 2;
+    google.protobuf.Timestamp completed_date = 3;
+    string status = 4;  // pending, in_progress, completed
+  }
+  
+  repeated RolloverPhase timeline = 6;
+  ResponseMeta meta = 7;
+}
+
+// GetDSRequest
+message GetDSRequest {
+  string zone_name = 1;
+  KeyType key_type = 2;  // Optional: filter by type
+}
+
+// GetDSResponse
+message GetDSResponse {
+  string zone_name = 1;
+  repeated DSRecord ds_records = 2;
+  ResponseMeta meta = 3;
+}
+
+// GenerateKeyRequest
+message GenerateKeyRequest {
+  string zone_name = 1;
+  KeyType type = 2;
+  DNSSECAlgorithm algorithm = 3;
+  int32 key_size = 4;  // For RSA algorithms
+  bool activate_immediately = 5;
+}
+
+// GenerateKeyResponse
+message GenerateKeyResponse {
+  DNSSECKey key = 1;
+  string public_key = 2;
+  string private_key = 3;  // Only in response, never stored in DB
+  repeated DSRecord ds_records = 4;
+  ResponseMeta meta = 5;
+}
+
+// ImportKeyRequest
+message ImportKeyRequest {
+  string zone_name = 1;
+  KeyType type = 2;
+  DNSSECAlgorithm algorithm = 3;
+  string public_key = 4;  // Base64 encoded
+  string private_key = 5;  // Base64 encoded (optional)
+  bool activate_immediately = 6;
+}
+
+// ImportKeyResponse
+message ImportKeyResponse {
+  DNSSECKey key = 1;
+  bool has_private = 2;
+  ResponseMeta meta = 3;
+}
+
+// ExportKeyRequest
+message ExportKeyRequest {
+  string zone_name = 1;
+  string key_id = 2;
+  bool include_private = 3;
+}
+
+// ExportKeyResponse
+message ExportKeyResponse {
+  DNSSECKey key = 1;
+  string public_key = 2;
+  string private_key = 3;  // Only if requested and available
+  ResponseMeta meta = 4;
+}
+
+// DeleteKeyRequest
+message DeleteKeyRequest {
+  string zone_name = 1;
+  string key_id = 2;
+  bool force = 3;  // Force deletion even if active
+}
+
+// DeleteKeyResponse
+message DeleteKeyResponse {
+  string key_id = 1;
+  bool success = 2;
+  string message = 3;
+  ResponseMeta meta = 4;
+}
+
+// ValidateChainRequest
+message ValidateChainRequest {
+  string zone_name = 1;
+  repeated string trust_anchors = 2;  // Optional: override trust anchors
+}
+
+// ValidateChainResponse
+message ValidateChainResponse {
+  string zone_name = 1;
+  bool valid = 2;
+  repeated string validation_path = 3;  // Chain path
+  repeated string errors = 4;
+  ResponseMeta meta = 5;
+}
+
+// WatchKeysRequest for DNSSEC key event streaming
+message WatchKeysRequest {
+  string zone_name = 1;
+  repeated string event_types = 2;  // key_created, key_activated, key_expiring, key_deleted
+  IncludeKeyMode include_public_key_mode = 3; // default server-side: MAY
+}
+
+// DNSSECEvent represents a DNSSEC operation event
+message DNSSECEvent {
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_KEY_CREATED = 1;
+    EVENT_TYPE_KEY_ACTIVATED = 2;
+    EVENT_TYPE_KEY_INACTIVATED = 3;
+    EVENT_TYPE_KEY_DELETED = 4;
+    EVENT_TYPE_KEY_EXPIRING = 5;
+    EVENT_TYPE_ROLLOVER_STARTED = 6;
+    EVENT_TYPE_ROLLOVER_COMPLETED = 7;
+    EVENT_TYPE_ZONE_SIGNED = 8;
+    EVENT_TYPE_VALIDATION_FAILED = 9;
+  }
+  
+  EventType type = 1;
+  string zone_name = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  
+  oneof detail {
+    DNSSECKey key = 4;
+    string error_message = 5;
+  }
+}

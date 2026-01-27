@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// QueryMeta contains metadata about a DNS query/response
+message QueryMeta {
+  string client_ip = 1;
+  int32 client_port = 2;
+  string protocol = 3;  // udp, tcp, dot, doh, doq
+  google.protobuf.Timestamp received_at = 4;
+  google.protobuf.Timestamp responded_at = 5;
+  google.protobuf.Duration latency = 6;
+  string server_id = 7;
+  string request_id = 8;  // correlation ID
+  bool cached = 9;
+  map<string, string> tags = 10;  // custom tags from plugins
+}
+
+// ResourceRecord represents a DNS resource record
+message ResourceRecord {
+  string name = 1;
+  string type = 2;      // A, AAAA, MX, CNAME, etc.
+  string class = 3;     // IN (default)
+  uint32 ttl = 4;
+  string data = 5;      // string representation of record data
+  bytes rdata = 6;      // DNS wire format record data
+  
+  // DNSSEC validation status
+  string dnssec_status = 7;  // insecure, secure, bogus, indeterminate
+}
+
+// DNSSECValidation contains DNSSEC validation details
+message DNSSECValidation {
+  bool validated = 1;
+  string status = 2;  // secure, insecure, bogus, indeterminate
+  string chain_status = 3;  // chain validated or reason for failure
+  repeated string validation_errors = 4;
+  map<string, string> details = 5;
+}
+
+// CacheEntry represents a cached DNS record
+message CacheEntry {
+  string name = 1;
+  string type = 2;
+  string class = 3;
+  uint32 ttl = 4;
+  uint32 original_ttl = 5;
+  repeated string data = 6;  // multiple records
+  google.protobuf.Timestamp cached_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  string source = 9;  // where it came from
+}
+
+// Error response format
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  map<string, string> metadata = 3;
+}
+
+// Standard response wrapper (for consistency)
+message ResponseMeta {
+  string request_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  map<string, string> headers = 3;
+}
+
+// DNSName for type-safe domain name handling
+message DNSName {
+  string name = 1;  // FQDN
+}
+
+// DNSType for type-safe record type handling
+message DNSType {
+  string type = 1;  // A, AAAA, MX, CNAME, etc.
+}
+
+// DNSClass for type-safe class handling
+message DNSClass {
+  string class = 1;  // IN (default), CH, HS
+}

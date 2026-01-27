@@ -1,0 +1,251 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// ZoneService manages DNS zones
+service ZoneService {
+  // ListZones returns all configured zones
+  rpc ListZones(ListZonesRequest) returns (ListZonesResponse);
+  
+  // GetZone returns details about a specific zone
+  rpc GetZone(GetZoneRequest) returns (GetZoneResponse);
+  
+  // ReloadZone reloads a zone from file
+  rpc ReloadZone(ReloadZoneRequest) returns (ReloadZoneResponse);
+  
+  // NotifySecondaries sends NOTIFY to secondary servers
+  rpc NotifySecondaries(NotifyRequest) returns (NotifyResponse);
+  
+  // TransferZone initiates a zone transfer (for secondary zones)
+  rpc TransferZone(TransferZoneRequest) returns (TransferZoneResponse);
+  
+  // UpdateRecords adds/updates/deletes records (dynamic DNS)
+  rpc UpdateRecords(UpdateRecordsRequest) returns (UpdateRecordsResponse);
+  
+  // GetRecords retrieves records from a zone
+  rpc GetRecords(GetRecordsRequest) returns (GetRecordsResponse);
+  
+  // WatchZone streams zone change events
+  rpc WatchZone(WatchZoneRequest) returns (stream ZoneEvent);
+}
+
+// Zone types
+enum ZoneType {
+  ZONE_TYPE_UNSPECIFIED = 0;
+  ZONE_TYPE_PRIMARY = 1;
+  ZONE_TYPE_SECONDARY = 2;
+  ZONE_TYPE_STUB = 3;
+  ZONE_TYPE_FORWARD = 4;
+}
+
+// Zone represents a DNS zone
+message Zone {
+  string name = 1;
+  ZoneType type = 2;
+  string file = 3;
+  google.protobuf.Timestamp last_reload = 4;
+  string status = 5;  // loaded, error, pending
+  
+  // SOA info
+  message SOA {
+    string primary = 1;
+    string admin = 2;
+    uint32 serial = 3;
+    uint32 refresh = 4;
+    uint32 retry = 5;
+    uint32 expire = 6;
+    uint32 minimum = 7;
+  }
+  SOA soa = 6;
+  
+  // Zone statistics
+  int32 record_count = 7;
+  bool dnssec_enabled = 8;
+  string dnssec_algorithm = 9;
+  
+  // For secondary/stub zones
+  repeated string primaries = 10;
+  google.protobuf.Timestamp last_transfer = 11;
+  
+  // Transfer configuration
+  repeated string notify_slaves = 12;
+  repeated string allow_transfer = 13;
+}
+
+// ListZonesRequest
+message ListZonesRequest {
+  ZoneType type = 1;  // Filter by type (optional, 0 = all)
+  string name_pattern = 2;  // Wildcard pattern (optional)
+}
+
+// ListZonesResponse
+message ListZonesResponse {
+  repeated Zone zones = 1;
+  int32 total = 2;
+}
+
+// GetZoneRequest
+message GetZoneRequest {
+  string zone_name = 1;
+  bool include_records = 2;  // Include all records
+  string record_type = 3;  // Filter records by type (optional)
+}
+
+// GetZoneResponse
+message GetZoneResponse {
+  Zone zone = 1;
+  repeated ResourceRecord records = 2;  // If include_records=true
+  ResponseMeta meta = 3;
+}
+
+// ReloadZoneRequest
+message ReloadZoneRequest {
+  string zone_name = 1;
+  bool verify_only = 2;  // Verify but don't load
+}
+
+// ReloadZoneResponse
+message ReloadZoneResponse {
+  string zone_name = 1;
+  bool success = 2;
+  string message = 3;
+  uint32 old_serial = 4;
+  uint32 new_serial = 5;
+  int32 record_count = 6;
+  google.protobuf.Duration duration = 7;
+  repeated string errors = 8;  // Parse errors if any
+  ResponseMeta meta = 9;
+}
+
+// NotifyRequest for NOTIFY operation
+message NotifyRequest {
+  string zone_name = 1;
+  repeated string servers = 2;  // Specific servers (optional, all if empty)
+}
+
+// NotifyResponse
+message NotifyResponse {
+  message NotifyResult {
+    string server = 1;
+    bool acknowledged = 2;
+    string message = 3;
+  }
+  
+  string zone_name = 1;
+  uint32 serial = 2;
+  repeated NotifyResult results = 3;
+  ResponseMeta meta = 4;
+}
+
+// TransferZoneRequest
+message TransferZoneRequest {
+  string zone_name = 1;
+  string transfer_type = 2;  // axfr or ixfr
+  string server = 3;  // Specific primary (optional)
+}
+
+// TransferZoneResponse
+message TransferZoneResponse {
+  string zone_name = 1;
+  string transfer_type = 2;
+  bool success = 3;
+  uint32 old_serial = 4;
+  uint32 new_serial = 5;
+  int32 records_changed = 6;
+  google.protobuf.Duration duration = 7;
+  string error_message = 8;
+  ResponseMeta meta = 9;
+}
+
+// Update operation types
+enum UpdateOperation {
+  UPDATE_OPERATION_UNSPECIFIED = 0;
+  UPDATE_OPERATION_ADD = 1;
+  UPDATE_OPERATION_DELETE = 2;
+  UPDATE_OPERATION_REPLACE = 3;
+}
+
+// RecordUpdate for dynamic DNS
+message RecordUpdate {
+  UpdateOperation operation = 1;
+  string name = 2;
+  string type = 3;
+  uint32 ttl = 4;
+  string data = 5;  // For add/replace operations
+  string old_data = 6;  // For replace operations
+}
+
+// UpdateRecordsRequest
+message UpdateRecordsRequest {
+  string zone_name = 1;
+  repeated RecordUpdate updates = 2;
+  bool increment_serial = 3;  // Auto-increment zone serial
+}
+
+// UpdateRecordsResponse
+message UpdateRecordsResponse {
+  message UpdateResult {
+    RecordUpdate update = 1;
+    bool success = 2;
+    string error = 3;
+  }
+  
+  string zone_name = 1;
+  repeated UpdateResult results = 2;
+  uint32 new_serial = 3;
+  int32 applied = 4;
+  int32 failed = 5;
+  ResponseMeta meta = 6;
+}
+
+// GetRecordsRequest
+message GetRecordsRequest {
+  string zone_name = 1;
+  string name = 2;  // Optional: specific name
+  string type = 3;  // Optional: specific type
+}
+
+// GetRecordsResponse
+message GetRecordsResponse {
+  string zone_name = 1;
+  repeated ResourceRecord records = 2;
+  int32 count = 3;
+  ResponseMeta meta = 4;
+}
+
+// WatchZoneRequest
+message WatchZoneRequest {
+  string zone_name = 1;
+  bool include_updates = 2;  // Include record update events
+  bool include_reloads = 3;  // Include zone reload events
+}
+
+// ZoneEvent represents a zone change event
+message ZoneEvent {
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_ZONE_RELOADED = 1;
+    EVENT_TYPE_RECORD_ADDED = 2;
+    EVENT_TYPE_RECORD_UPDATED = 3;
+    EVENT_TYPE_RECORD_DELETED = 4;
+    EVENT_TYPE_SERIAL_CHANGED = 5;
+    EVENT_TYPE_ZONE_ERROR = 6;
+  }
+  
+  EventType type = 1;
+  string zone_name = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  
+  // Event details
+  oneof detail {
+    RecordUpdate record = 4;
+    uint32 new_serial = 5;
+    string error_message = 6;
+  }
+}

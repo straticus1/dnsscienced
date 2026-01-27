@@ -1,0 +1,153 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+// CacheService manages DNS cache operations
+service CacheService {
+  // GetStats returns cache statistics
+  rpc GetStats(GetCacheStatsRequest) returns (GetCacheStatsResponse);
+  
+  // Lookup retrieves specific cache entries
+  rpc Lookup(CacheLookupRequest) returns (CacheLookupResponse);
+  
+  // Flush clears cache entries
+  rpc Flush(FlushCacheRequest) returns (FlushCacheResponse);
+  
+  // Prefetch adds entries to cache
+  rpc Prefetch(PrefetchRequest) returns (PrefetchResponse);
+  
+  // WatchCache streams cache events (hits, misses, evictions)
+  rpc WatchCache(WatchCacheRequest) returns (stream CacheEvent);
+}
+
+// GetCacheStatsRequest
+message GetCacheStatsRequest {
+  string backend = 1;  // memory, redis, etc. (optional)
+}
+
+// Cache statistics
+message CacheStats {
+  int64 entries = 1;
+  int64 size_bytes = 2;
+  int64 max_bytes = 3;
+  float utilization = 4;
+  
+  // Performance metrics
+  int64 hits = 5;
+  int64 misses = 6;
+  float hit_rate = 7;
+  
+  // Entry breakdown by type
+  map<string, int64> by_type = 8;
+  
+  // TTL statistics
+  uint32 avg_ttl_seconds = 9;
+  uint32 min_ttl_seconds = 10;
+  uint32 max_ttl_seconds = 11;
+  
+  // Eviction metrics
+  int64 evictions_total = 12;
+  map<string, int64> evictions_by_reason = 13;
+  
+  // Time window
+  google.protobuf.Timestamp measured_at = 14;
+  string backend = 15;
+}
+
+// GetCacheStatsResponse
+message GetCacheStatsResponse {
+  CacheStats stats = 1;
+  ResponseMeta meta = 2;
+}
+
+// CacheLookupRequest
+message CacheLookupRequest {
+  string name = 1;
+  string type = 2;  // Optional: filter by type
+}
+
+// CacheLookupResponse
+message CacheLookupResponse {
+  repeated CacheEntry entries = 1;
+  int32 count = 2;
+  ResponseMeta meta = 3;
+}
+
+// FlushCacheRequest
+message FlushCacheRequest {
+  enum FlushScope {
+    FLUSH_SCOPE_UNSPECIFIED = 0;
+    FLUSH_SCOPE_ALL = 1;
+    FLUSH_SCOPE_DOMAIN = 2;
+    FLUSH_SCOPE_TYPE = 3;
+    FLUSH_SCOPE_EXACT = 4;
+  }
+  
+  FlushScope scope = 1;
+  string domain = 2;  // For FLUSH_SCOPE_DOMAIN
+  string type = 3;  // For FLUSH_SCOPE_TYPE
+  bool include_subdomains = 4;  // For FLUSH_SCOPE_DOMAIN
+}
+
+// FlushCacheResponse
+message FlushCacheResponse {
+  int32 entries_removed = 1;
+  int64 bytes_freed = 2;
+  google.protobuf.Timestamp flushed_at = 3;
+  ResponseMeta meta = 4;
+}
+
+// PrefetchRequest
+message PrefetchRequest {
+  repeated string names = 1;
+  repeated string types = 2;  // Types to prefetch for each name
+  int32 priority = 3;  // 0=low, 1=normal, 2=high
+}
+
+// PrefetchResponse
+message PrefetchResponse {
+  int32 queued = 1;
+  repeated string errors = 2;
+  ResponseMeta meta = 3;
+}
+
+// WatchCacheRequest for cache event streaming
+message WatchCacheRequest {
+  repeated string types = 1;  // Event types to watch: hit, miss, evict, prefetch
+  string domain_pattern = 2;  // Optional: filter by domain pattern
+}
+
+// CacheEvent represents a cache operation
+message CacheEvent {
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_HIT = 1;
+    EVENT_TYPE_MISS = 2;
+    EVENT_TYPE_EVICT = 3;
+    EVENT_TYPE_STORE = 4;
+    EVENT_TYPE_DELETE = 5;
+    EVENT_TYPE_PREFETCH = 6;
+    EVENT_TYPE_PREFETCH_COMPLETE = 7;
+  }
+  
+  EventType type = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  
+  // Query info
+  string name = 3;
+  string query_type = 4;
+  
+  // For HIT/MISS events
+  string reason = 5;  // For MISS: expired, never_cached, etc.
+  
+  // For EVICT events
+  string eviction_reason = 6;  // lru, expired, other
+  
+  // For STORE/DELETE events
+  CacheEntry entry = 7;
+}

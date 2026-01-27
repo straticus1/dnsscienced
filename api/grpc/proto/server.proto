@@ -1,0 +1,265 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "cache.proto";
+import "google/protobuf/timestamp.proto";
+
+// ServerService manages server control and monitoring
+service ServerService {
+  // GetStatus returns server health and operational status
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  
+  // GetStats returns comprehensive query statistics
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+  
+  // Reload triggers configuration reload
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+  
+  // Shutdown gracefully shuts down the server
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  
+  // GetConfig returns current configuration (redacted)
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  
+  // GetLicense returns license information
+  rpc GetLicense(GetLicenseRequest) returns (GetLicenseResponse);
+  
+  // WatchStatus streams server status events
+  rpc WatchStatus(WatchStatusRequest) returns (stream ServerStatusEvent);
+  
+  // GetMetrics returns Prometheus-style metrics
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+}
+
+// HealthStatus enumeration
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}
+
+// Server information
+message ServerInfo {
+  string id = 1;
+  string version = 2;
+  string daemon = 3;  // dnsscience-authd, dnsscience-cached
+  int64 uptime_seconds = 4;
+  google.protobuf.Timestamp started_at = 5;
+  string hostname = 6;
+}
+
+// Health information
+message HealthInfo {
+  enum HealthCheck {
+    HEALTH_CHECK_UNSPECIFIED = 0;
+    HEALTH_CHECK_ZONES = 1;
+    HEALTH_CHECK_DNSSEC = 2;
+    HEALTH_CHECK_CACHE = 3;
+    HEALTH_CHECK_NETWORK = 4;
+    HEALTH_CHECK_STORAGE = 5;
+  }
+  
+  message CheckResult {
+    HealthCheck check = 1;
+    HealthStatus status = 2;
+    string message = 3;
+    int32 error_count = 4;
+  }
+  
+  HealthStatus status = 1;
+  repeated CheckResult checks = 2;
+}
+
+// Resource usage information
+message ResourceInfo {
+  float cpu_percent = 1;
+  int64 memory_bytes = 2;
+  float memory_percent = 3;
+  int32 goroutines = 4;
+  int32 open_file_descriptors = 5;
+  int32 max_file_descriptors = 6;
+}
+
+// Network connection statistics
+message NetworkStats {
+  int32 udp_connections = 1;
+  int32 tcp_connections = 2;
+  int32 tls_connections = 3;
+  int32 https_connections = 4;
+  int32 quic_connections = 5;
+}
+
+// GetStatusRequest
+message GetStatusRequest {
+  bool include_resources = 1;
+}
+
+// GetStatusResponse
+message GetStatusResponse {
+  ServerInfo server = 1;
+  HealthInfo health = 2;
+  ResourceInfo resources = 3;
+  NetworkStats network = 4;
+  ResponseMeta meta = 5;
+}
+
+// GetStatsRequest
+message GetStatsRequest {
+  enum TimePeriod {
+    TIME_PERIOD_UNSPECIFIED = 0;
+    TIME_PERIOD_1M = 1;
+    TIME_PERIOD_5M = 2;
+    TIME_PERIOD_1H = 3;
+    TIME_PERIOD_24H = 4;
+    TIME_PERIOD_7D = 5;
+  }
+  
+  TimePeriod period = 1;
+  repeated string breakdowns = 2;  // type, rcode, transport, zone
+}
+
+// Query statistics
+message QueryStats {
+  int64 total = 1;
+  double per_second = 2;
+  
+  map<string, int64> by_type = 3;      // A, AAAA, MX, etc.
+  map<string, int64> by_rcode = 4;     // NOERROR, NXDOMAIN, etc.
+  map<string, int64> by_transport = 5; // udp, tcp, dot, doh, doq
+}
+
+// Latency statistics
+message LatencyStats {
+  double avg_ms = 1;
+  double p50_ms = 2;
+  double p95_ms = 3;
+  double p99_ms = 4;
+  double max_ms = 5;
+}
+
+// DNSSEC statistics
+message DNSSECStats {
+  int64 validations_total = 1;
+  int64 secure = 2;
+  int64 insecure = 3;
+  int64 bogus = 4;
+  int64 indeterminate = 5;
+}
+
+// GetStatsResponse
+message GetStatsResponse {
+  string period = 1;
+  google.protobuf.Timestamp measured_at = 2;
+  
+  QueryStats queries = 3;
+  LatencyStats latency = 4;
+  CacheStats cache = 5;
+  DNSSECStats dnssec = 6;
+  
+  ResponseMeta meta = 7;
+}
+
+// ReloadRequest
+message ReloadRequest {
+  repeated string sections = 1;  // zones, acl, config, all
+}
+
+// ReloadResponse
+message ReloadResponse {
+  bool success = 1;
+  string message = 2;
+  int32 duration_ms = 3;
+  repeated string reloaded = 4;
+  repeated string errors = 5;
+  ResponseMeta meta = 6;
+}
+
+// ShutdownRequest
+message ShutdownRequest {
+  int32 timeout_seconds = 1;  // Default: 30
+  bool force = 2;
+}
+
+// ShutdownResponse
+message ShutdownResponse {
+  string message = 1;
+  int32 graceful_period_seconds = 2;
+}
+
+// GetConfigRequest
+message GetConfigRequest {
+  string section = 1;  // global, zones, security, etc. (optional)
+  bool redact_secrets = 2;  // Default: true
+}
+
+// GetConfigResponse
+message GetConfigResponse {
+  map<string, string> config = 1;  // JSON-encoded config sections
+  ResponseMeta meta = 2;
+}
+
+// License information
+message LicenseInfo {
+  string product = 1;
+  string version = 2;
+  string licensee = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool is_valid = 6;
+  int32 days_until_expiry = 7;
+  repeated string features = 8;
+  string serial = 9;
+}
+
+// GetLicenseRequest
+message GetLicenseRequest {}
+
+// GetLicenseResponse
+message GetLicenseResponse {
+  LicenseInfo license = 1;
+  ResponseMeta meta = 2;
+}
+
+// WatchStatusRequest for status streaming
+message WatchStatusRequest {
+  repeated string event_types = 1;  // health_changed, memory_high, etc.
+}
+
+// ServerStatusEvent represents a status change event
+message ServerStatusEvent {
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_HEALTH_CHANGED = 1;
+    EVENT_TYPE_HIGH_MEMORY = 2;
+    EVENT_TYPE_HIGH_CPU = 3;
+    EVENT_TYPE_CONNECTION_LIMIT = 4;
+    EVENT_TYPE_DISK_SPACE_LOW = 5;
+    EVENT_TYPE_ZONE_LOAD_FAILED = 6;
+    EVENT_TYPE_DNSSEC_KEY_EXPIRING = 7;
+  }
+  
+  EventType type = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string message = 3;
+  HealthStatus severity = 4;
+  map<string, string> details = 5;
+}
+
+// GetMetricsRequest
+message GetMetricsRequest {
+  string format = 1;  // prometheus, json (default: prometheus)
+  repeated string labels = 2;  // Optional: filter by labels
+}
+
+// GetMetricsResponse
+message GetMetricsResponse {
+  string format = 1;
+  string content = 2;  // Prometheus text format or JSON
+  google.protobuf.Timestamp collected_at = 3;
+  ResponseMeta meta = 4;
+}

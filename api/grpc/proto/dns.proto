@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "google/protobuf/duration.proto";
+
+// DNSService provides DNS query operations
+service DNSService {
+  // Query performs a single DNS query
+  rpc Query(QueryRequest) returns (QueryResponse);
+  
+  // StreamQueries enables bidirectional streaming for continuous queries
+  // Client can send queries and receive responses in real-time
+  rpc StreamQueries(stream QueryRequest) returns (stream QueryResponse);
+  
+  // BatchQueries for high-volume query operations
+  rpc BatchQueries(BatchQueryRequest) returns (BatchQueryResponse);
+}
+
+// QueryRequest represents a single DNS query
+message QueryRequest {
+  string name = 1;
+  string type = 2;              // A, AAAA, MX, CNAME, SOA, TXT, etc.
+  string class = 3;             // IN (default), CH, HS
+  bool dnssec = 4;              // Request DNSSEC validation
+  bool recursion_desired = 5;   // RD flag
+  bool checking_disabled = 6;   // CD flag (skip DNSSEC validation)
+  string server_id = 7;         // Target specific server (optional)
+  map<string, string> tags = 8; // Custom tags for request
+  string trace_id = 9;          // Correlation/trace ID for logging
+}
+
+// QueryResponse represents a DNS response
+message QueryResponse {
+  // Response code
+  int32 rcode = 1;  // 0=NOERROR, 1=FORMERR, 2=SERVFAIL, 3=NXDOMAIN, etc.
+  string rcode_name = 2;  // NOERROR, FORMERR, SERVFAIL, NXDOMAIN, etc.
+  
+  // Response sections
+  repeated ResourceRecord answer = 3;
+  repeated ResourceRecord authority = 4;
+  repeated ResourceRecord additional = 5;
+  
+  // Response flags
+  bool authoritative = 6;
+  bool truncated = 7;
+  bool recursion_available = 8;
+  
+  // Metadata
+  QueryMeta meta = 9;
+  ResponseMeta response_meta = 10;
+  
+  // DNSSEC validation info (if requested)
+  DNSSECValidation dnssec = 11;
+  
+  // Optional: wire format response
+  bytes wire_format = 12;
+  
+  // Query that was answered (for streaming context)
+  QueryRequest request = 13;
+  
+  // Error information if present
+  ErrorDetail error = 14;
+}
+
+// BatchQueryRequest for high-volume operations
+message BatchQueryRequest {
+  repeated QueryRequest queries = 1;
+  bool fail_on_error = 2;  // Stop on first error or continue
+  int32 timeout_seconds = 3;
+}
+
+// BatchQueryResponse for high-volume operations
+message BatchQueryResponse {
+  repeated QueryResponse responses = 1;
+  int32 successful = 2;
+  int32 failed = 3;
+  google.protobuf.Duration total_time = 4;
+  repeated string errors = 5;
+}
+
+// QueryTrace for detailed resolution tracing
+message QueryTrace {
+  string query_name = 1;
+  string query_type = 2;
+  
+  message TraceStep {
+    string server = 1;
+    QueryRequest query = 2;
+    QueryResponse response = 3;
+    google.protobuf.Duration latency = 4;
+    bool cached = 5;
+    DNSSECValidation dnssec = 6;
+    int32 recursion_depth = 7;
+  }
+  
+  repeated TraceStep steps = 3;
+  bool successful = 4;
+  string error_message = 5;
+}
