@@ -54,6 +54,14 @@ message CacheEntry {
   google.protobuf.Timestamp cached_at = 7;
   google.protobuf.Timestamp expires_at = 8;
   string source = 9;  // where it came from
+
+  // Threat Intelligence Metadata
+  int32 threat_score = 10; // 0-100 (0 = benign, 100 = malicious)
+  repeated string categories = 11; // malware, phishing, c2, botnet, etc.
+  string reputation = 12; // benign, suspicious, malicious, unknown
+  google.protobuf.Timestamp first_seen = 13;
+  google.protobuf.Timestamp last_seen = 14;
+  string threat_source = 15; // feed name/provider
 }
 
 // Error response format

@@ -313,16 +313,23 @@ func (x *DNSSECValidation) GetDetails() map[string]string {
 
 // CacheEntry represents a cached DNS record
 type CacheEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
-	Class         string                 `protobuf:"bytes,3,opt,name=class,proto3" json:"class,omitempty"`
-	Ttl           uint32                 `protobuf:"varint,4,opt,name=ttl,proto3" json:"ttl,omitempty"`
-	OriginalTtl   uint32                 `protobuf:"varint,5,opt,name=original_ttl,json=originalTtl,proto3" json:"original_ttl,omitempty"`
-	Data          []string               `protobuf:"bytes,6,rep,name=data,proto3" json:"data,omitempty"` // multiple records
-	CachedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=cached_at,json=cachedAt,proto3" json:"cached_at,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	Source        string                 `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"` // where it came from
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type        string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Class       string                 `protobuf:"bytes,3,opt,name=class,proto3" json:"class,omitempty"`
+	Ttl         uint32                 `protobuf:"varint,4,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	OriginalTtl uint32                 `protobuf:"varint,5,opt,name=original_ttl,json=originalTtl,proto3" json:"original_ttl,omitempty"`
+	Data        []string               `protobuf:"bytes,6,rep,name=data,proto3" json:"data,omitempty"` // multiple records
+	CachedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=cached_at,json=cachedAt,proto3" json:"cached_at,omitempty"`
+	ExpiresAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Source      string                 `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"` // where it came from
+	// Threat Intelligence Metadata
+	ThreatScore   int32                  `protobuf:"varint,10,opt,name=threat_score,json=threatScore,proto3" json:"threat_score,omitempty"` // 0-100 (0 = benign, 100 = malicious)
+	Categories    []string               `protobuf:"bytes,11,rep,name=categories,proto3" json:"categories,omitempty"`                       // malware, phishing, c2, botnet, etc.
+	Reputation    string                 `protobuf:"bytes,12,opt,name=reputation,proto3" json:"reputation,omitempty"`                       // benign, suspicious, malicious, unknown
+	FirstSeen     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=first_seen,json=firstSeen,proto3" json:"first_seen,omitempty"`
+	LastSeen      *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
+	ThreatSource  string                 `protobuf:"bytes,15,opt,name=threat_source,json=threatSource,proto3" json:"threat_source,omitempty"` // feed name/provider
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -416,6 +423,48 @@ func (x *CacheEntry) GetExpiresAt() *timestamppb.Timestamp {
 func (x *CacheEntry) GetSource() string {
 	if x != nil {
 		return x.Source
+	}
+	return ""
+}
+
+func (x *CacheEntry) GetThreatScore() int32 {
+	if x != nil {
+		return x.ThreatScore
+	}
+	return 0
+}
+
+func (x *CacheEntry) GetCategories() []string {
+	if x != nil {
+		return x.Categories
+	}
+	return nil
+}
+
+func (x *CacheEntry) GetReputation() string {
+	if x != nil {
+		return x.Reputation
+	}
+	return ""
+}
+
+func (x *CacheEntry) GetFirstSeen() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FirstSeen
+	}
+	return nil
+}
+
+func (x *CacheEntry) GetLastSeen() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeen
+	}
+	return nil
+}
+
+func (x *CacheEntry) GetThreatSource() string {
+	if x != nil {
+		return x.ThreatSource
 	}
 	return ""
 }
@@ -716,7 +765,7 @@ const file_common_proto_rawDesc = "" +
 	"\adetails\x18\x05 \x03(\v2,.dnsscience.v1.DNSSECValidation.DetailsEntryR\adetails\x1a:\n" +
 	"\fDetailsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9f\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9b\x04\n" +
 	"\n" +
 	"CacheEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
@@ -728,7 +777,19 @@ const file_common_proto_rawDesc = "" +
 	"\tcached_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\bcachedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
-	"\x06source\x18\t \x01(\tR\x06source\"\xbe\x01\n" +
+	"\x06source\x18\t \x01(\tR\x06source\x12!\n" +
+	"\fthreat_score\x18\n" +
+	" \x01(\x05R\vthreatScore\x12\x1e\n" +
+	"\n" +
+	"categories\x18\v \x03(\tR\n" +
+	"categories\x12\x1e\n" +
+	"\n" +
+	"reputation\x18\f \x01(\tR\n" +
+	"reputation\x129\n" +
+	"\n" +
+	"first_seen\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tfirstSeen\x127\n" +
+	"\tlast_seen\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\x12#\n" +
+	"\rthreat_source\x18\x0f \x01(\tR\fthreatSource\"\xbe\x01\n" +
 	"\vErrorDetail\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12D\n" +
@@ -789,14 +850,16 @@ var file_common_proto_depIdxs = []int32{
 	10, // 4: dnsscience.v1.DNSSECValidation.details:type_name -> dnsscience.v1.DNSSECValidation.DetailsEntry
 	13, // 5: dnsscience.v1.CacheEntry.cached_at:type_name -> google.protobuf.Timestamp
 	13, // 6: dnsscience.v1.CacheEntry.expires_at:type_name -> google.protobuf.Timestamp
-	11, // 7: dnsscience.v1.ErrorDetail.metadata:type_name -> dnsscience.v1.ErrorDetail.MetadataEntry
-	13, // 8: dnsscience.v1.ResponseMeta.timestamp:type_name -> google.protobuf.Timestamp
-	12, // 9: dnsscience.v1.ResponseMeta.headers:type_name -> dnsscience.v1.ResponseMeta.HeadersEntry
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	13, // 7: dnsscience.v1.CacheEntry.first_seen:type_name -> google.protobuf.Timestamp
+	13, // 8: dnsscience.v1.CacheEntry.last_seen:type_name -> google.protobuf.Timestamp
+	11, // 9: dnsscience.v1.ErrorDetail.metadata:type_name -> dnsscience.v1.ErrorDetail.MetadataEntry
+	13, // 10: dnsscience.v1.ResponseMeta.timestamp:type_name -> google.protobuf.Timestamp
+	12, // 11: dnsscience.v1.ResponseMeta.headers:type_name -> dnsscience.v1.ResponseMeta.HeadersEntry
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_common_proto_init() }

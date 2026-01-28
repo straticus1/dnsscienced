@@ -13,14 +13,17 @@ import (
 )
 
 var (
-	udpAddr      = flag.String("udp", ":5353", "UDP listen address")
-	tcpAddr      = flag.String("tcp", ":5353", "TCP listen address")
-	udpListeners = flag.Int("listeners", runtime.NumCPU(), "Number of UDP listeners (SO_REUSEPORT)")
-	zoneFile     = flag.String("zone", "", "Zone file to load (optional)")
-	zoneFormat   = flag.String("format", "dnszone", "Zone file format (dnszone, bind)")
-	recursive    = flag.Bool("recursive", true, "Enable recursive resolver")
+	udpAddr       = flag.String("udp", ":5353", "UDP listen address")
+	tcpAddr       = flag.String("tcp", ":5353", "TCP listen address")
+	udpListeners  = flag.Int("listeners", runtime.NumCPU(), "Number of UDP listeners (SO_REUSEPORT)")
+	zoneFile      = flag.String("zone", "", "Zone file to load (optional)")
+	zoneFormat    = flag.String("format", "dnszone", "Zone file format (dnszone, bind)")
+	recursive     = flag.Bool("recursive", true, "Enable recursive resolver")
 	authoritative = flag.Bool("authoritative", false, "Enable authoritative server")
-	stats        = flag.Bool("stats", true, "Print statistics periodically")
+	// Deduplication handled in previous lines
+
+	stats      = flag.Bool("stats", true, "Print statistics periodically")
+	darkApiKey = flag.String("darkapi-key", "", "API Key for darkapi.io threat intelligence")
 )
 
 func main() {
@@ -39,7 +42,9 @@ func main() {
 	cfg.TCPAddr = *tcpAddr
 	cfg.UDPListeners = *udpListeners
 	cfg.EnableRecursive = *recursive
-	cfg.EnableAuthoritative = *authoritative
+	// Deduplication handled in previous lines
+
+	cfg.RecursiveConfig.CacheConfig.DarkAPIKey = *darkApiKey
 
 	fmt.Printf("Configuration:\n")
 	fmt.Printf("  UDP Address:      %s\n", cfg.UDPAddr)

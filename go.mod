@@ -3,6 +3,7 @@ module github.com/dnsscience/dnsscienced
 go 1.24.0
 
 require (
+	github.com/dchest/siphash v1.2.3
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.18.0
 	github.com/stretchr/testify v1.11.1
@@ -15,7 +16,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/dchest/siphash v1.2.3 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

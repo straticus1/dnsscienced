@@ -1,9 +1,12 @@
 package cache
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	pb "github.com/dnsscience/dnsscienced/api/grpc/proto/pb"
 )
 
 const (
@@ -15,6 +18,18 @@ const (
 
 	// Cleanup interval for expired entries
 	cleanupInterval = 60 * time.Second
+)
+
+// ValidationMode defines the strictness of cache admission via DNSSEC
+type ValidationMode string
+
+const (
+	// ValidationModePass allows all entries (default)
+	ValidationModePass ValidationMode = "pass"
+	// ValidationModeLogOnly logs invalid entries but caches them
+	ValidationModeLogOnly ValidationMode = "log-only"
+	// ValidationModeEnforced only caches DNSSEC-validated entries
+	ValidationModeEnforced ValidationMode = "enforced"
 )
 
 // Entry represents a cached DNS response
@@ -37,6 +52,14 @@ type Entry struct {
 	QName  string
 	QType  uint16
 	QClass uint16
+
+	// Threat Intelligence Metadata
+	ThreatScore  int32
+	Categories   []string
+	Reputation   string
+	FirstSeen    time.Time
+	LastSeen     time.Time
+	ThreatSource string
 }
 
 // IsExpired checks if entry has expired
@@ -69,14 +92,23 @@ type ShardedCache struct {
 	shardMask  uint64 // For fast modulo: hash & mask
 
 	// Serve stale configuration
-	serveStale    bool
-	maxStaleTTL   time.Duration
-	staleRefresh  bool
+	serveStale   bool
+	maxStaleTTL  time.Duration
+	staleRefresh bool
+
+	// Threat enrichment
+	enricher *ThreatScorer
+
+	// Validation Mode
+	validationMode ValidationMode
+
+	// Event Broadcaster
+	broadcaster *Broadcaster
 
 	// Statistics (atomic for lock-free access)
-	hits       atomic.Uint64
-	misses     atomic.Uint64
-	evictions  atomic.Uint64
+	hits        atomic.Uint64
+	misses      atomic.Uint64
+	evictions   atomic.Uint64
 	expirations atomic.Uint64
 
 	// Cleanup goroutine management
@@ -96,6 +128,12 @@ type Config struct {
 	ServeStale   bool
 	MaxStaleTTL  time.Duration
 	StaleRefresh bool // Whether to trigger background refresh
+
+	// DNSSEC Validation Mode
+	ValidationMode ValidationMode
+
+	// Threat Intelligence
+	DarkAPIKey string
 }
 
 // NewShardedCache creates a new sharded cache
@@ -105,6 +143,9 @@ func NewShardedCache(cfg Config) *ShardedCache {
 	}
 	if cfg.MaxEntries == 0 {
 		cfg.MaxEntries = defaultShardSize * cfg.ShardCount
+	}
+	if cfg.ValidationMode == "" {
+		cfg.ValidationMode = ValidationModePass
 	}
 
 	// Ensure shard count is power of 2
@@ -120,13 +161,18 @@ func NewShardedCache(cfg Config) *ShardedCache {
 	shardSize := cfg.MaxEntries / cfg.ShardCount
 
 	c := &ShardedCache{
-		shards:        make([]*shard, cfg.ShardCount),
-		shardCount:    cfg.ShardCount,
-		shardMask:     uint64(cfg.ShardCount - 1),
-		serveStale:    cfg.ServeStale,
-		maxStaleTTL:   cfg.MaxStaleTTL,
-		staleRefresh:  cfg.StaleRefresh,
-		stopCleanup:   make(chan struct{}),
+		shards:       make([]*shard, cfg.ShardCount),
+		shardCount:   cfg.ShardCount,
+		shardMask:    uint64(cfg.ShardCount - 1),
+		serveStale:   cfg.ServeStale,
+		maxStaleTTL:  cfg.MaxStaleTTL,
+		staleRefresh: cfg.StaleRefresh,
+		// Deduplication handled
+
+		enricher:       NewThreatScorer(cfg.DarkAPIKey),
+		validationMode: cfg.ValidationMode,
+		broadcaster:    NewBroadcaster(),
+		stopCleanup:    make(chan struct{}),
 	}
 
 	// Initialize shards
@@ -193,6 +239,27 @@ func (c *ShardedCache) Set(hash uint64, entry *Entry) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
+	// Validation Mode Logic
+	if !entry.DNSSECValidated {
+		switch c.validationMode {
+		case ValidationModeEnforced:
+			// Drop invalid entries in enforced mode
+			return
+		case ValidationModeLogOnly:
+			// Log but allow (using fmt for MVP)
+			fmt.Printf("[CACHE] Validation failure for %s (LogOnly)\n", entry.QName)
+		}
+	}
+
+	if c.enricher != nil {
+		c.enricher.EnrichEntry(entry)
+	}
+
+	// Publish Store Event (only if threat found or always? Plan said important events. Let's publish all new stores for now, stream filtering handles the rest)
+	if c.broadcaster != nil {
+		c.broadcaster.PublishStore(entry)
+	}
+
 	// Check if we need to evict
 	if len(shard.entries) >= shard.maxSize {
 		// Simple LRU: remove oldest entry
@@ -229,6 +296,14 @@ func (c *ShardedCache) evictOldest(s *shard) {
 	if !first {
 		delete(s.entries, oldestHash)
 		c.evictions.Add(1)
+		// Publish Evict Event? Maybe.
+		// For Streaming Intelligence, we care most about Adds.
+		// But let's add it for completeness.
+		// NOTE: broadcaster.Publish needs an Entry. We need to retrieve it before deleting.
+		// But we don't have the entry here locally easily without re-lookup or keeping reference.
+		// Loop implementation kept 'oldestTime', but we didn't keep 'oldestEntry'.
+		// Let's optimize: skip evict event for now to save lookup cost, unless we really need it.
+		// Actually, let's keep it simple.
 	}
 }
 
@@ -349,4 +424,14 @@ func (c *ShardedCache) ForEach(fn func(hash uint64, entry *Entry)) {
 		}
 		shard.mu.RUnlock()
 	}
+}
+
+// Subscribe returns a channel that receives cache events
+func (c *ShardedCache) Subscribe() chan *pb.CacheEvent {
+	return c.broadcaster.Subscribe()
+}
+
+// Unsubscribe removes a channel from subscription
+func (c *ShardedCache) Unsubscribe(ch chan *pb.CacheEvent) {
+	c.broadcaster.Unsubscribe(ch)
 }
