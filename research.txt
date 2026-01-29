@@ -1,0 +1,15 @@
+ focuses on data integrity and privacy through features like mandatory DNSSEC validation, support for DNS-over-TLS (DoT) and DNS-over-HTTPS (DoH), and Query Name Minimisation. It enhances security by hardening against cache poisoning, performing strict response scrubbing, and employing high-entropy random port/query ID generation. 
+Key security features include:
+DNSSEC Validation: Automatically validates DNS signatures to ensure responses are authentic and not tampered with, rejecting forged, malicious, or incorrect data.
+Privacy & Encryption: Supports DNS-over-TLS (DoT) and DNS-over-HTTPS (DoH) for encrypted communication between the client and resolver.
+Query Name Minimisation: Reduces privacy leakage by not sending the full query name to authoritative name servers.
+Hardening Measures:
+Response Scrubbing: Cleans incoming responses of unnecessary or malicious data.
+Harden-Glue: Protects against malicious "glue" records (out-of-zone data).
+Case Preservation (0x20 bit encoding): Increases resistance to hijacking by capitalizing random letters in queries.
+Max Randomness: Uses strong random number generators for Query IDs and source ports to prevent spoofing.
+Access Control: Allows administrators to restrict which clients can send queries.
+Rate Limiting: Protects against DoS/DDoS attacks by limiting queries per second.
+Local Filtering/Blocking: Supports Response Policy Zones (RPZ) to block malicious domains.
+Authority Zones: Allows local loading of root zones for increased independence and security. 
+Unbound's design minimizes the attack surface by excluding non-essential features like Dynamic DNS updates. 

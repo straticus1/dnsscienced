@@ -1,0 +1,191 @@
+# DNSScienced + ads-httpproxy Integration TODO
+
+## Vision: Threat-Intel Aware DNS Cache as HTTP Proxy Data Source
+
+Transform dnsscienced's cache into a living threat intelligence database that ads-httpproxy
+can query via gRPC for real-time security decisions.
+
+## Architecture Overview
+
+```
+Client → ads-httpproxy → dnsscienced gRPC CacheService → Decision
+                ↓                          ↓
+           Block/Allow              Threat Intel Metadata
+```
+
+## Phase 1: Basic Integration
+
+### dnsscienced Side
+- [ ] Extend CacheEntry message in `api/grpc/proto/common.proto` with threat metadata:
+  - `int32 threat_score` (0-100)
+  - `repeated string categories` (malware, phishing, c2, botnet, etc.)
+  - `string reputation` (benign, suspicious, malicious, unknown)
+  - `google.protobuf.Timestamp first_seen`
+  - `google.protobuf.Timestamp last_seen`
+  - `string threat_source` (feed name/provider)
+
+- [ ] Regenerate protobuf code: `make proto` or `protoc --go_out=. --go-grpc_out=. api/grpc/proto/*.proto`
+
+- [ ] Create `internal/cache/enrichment.go` for threat scoring logic
+  - Simple reputation lookup from threat feeds
+  - Domain categorization (match against known malware/phishing lists)
+  - IP reputation checks
+
+- [ ] Update cache manager to populate threat metadata when storing entries
+  - Hook into `Store()` method in cache implementation
+  - Query threat intelligence sources during cache population
+
+### ads-httpproxy Side (in /Users/ryan/development/ads-httpproxy)
+- [ ] Add dnsscienced proto definitions as dependency
+  - Option 1: Git submodule or vendoring
+  - Option 2: Generate Go client from .proto files locally
+
+- [ ] Create `internal/dnscache/client.go` for gRPC client
+  - Connect to dnsscienced gRPC endpoint (default: localhost:8443)
+  - Implement connection pooling and retry logic
+  - Handle TLS/mTLS if required
+
+- [ ] Update `internal/threat/manager.go` to add DNS cache lookup method:
+  ```go
+  func (m *Manager) CheckDomainViaCache(domain string) (blocked bool, score int, err error)
+  ```
+
+- [ ] Integrate into proxy request flow:
+  - In `OnRequest` handler, extract domain from `req.Host`
+  - Call `CacheService.Lookup()` via gRPC
+  - Block if `threat_score > threshold` (e.g., 80)
+  - Log threat metadata for audit trail
+
+## Phase 2: Streaming Intelligence
+
+### dnsscienced Side
+- [ ] Implement `WatchCache()` RPC in `api/grpc/services/cache.go:48`
+  - Create event channel for cache operations (STORE, EVICT, HIT, MISS)
+  - Filter events by domain pattern and event types
+  - Stream CacheEvent messages to subscribers
+
+- [ ] Add cache event publisher to cache manager
+  - Publish events on cache mutations
+  - Include threat metadata in STORE events
+
+### ads-httpproxy Side
+- [ ] Subscribe to `WatchCache()` stream for real-time threat updates
+  - Launch goroutine to consume cache events
+  - Auto-update threat manager when malicious domains detected
+  - No more polling - push-based threat intelligence
+
+- [ ] Implement event handler in `internal/threat/manager.go`:
+  ```go
+  func (m *Manager) StreamThreatUpdates(ctx context.Context) error
+  ```
+
+## Phase 3: Advanced Threat Intelligence
+
+### dnsscienced Features
+- [ ] Multi-source threat feed aggregation
+  - Integrate with public feeds (abuse.ch, Spamhaus, etc.)
+  - Support custom threat list imports
+  - Periodic refresh with configurable intervals
+
+- [ ] Historical query analysis for anomaly detection
+  - Track query patterns per client
+  - Detect DGA (Domain Generation Algorithm) patterns
+  - Identify DNS tunneling attempts
+
+- [ ] Response Policy Zones (RPZ) support
+  - Return NXDOMAIN for blocked domains
+  - Support CNAME rewriting to sinkhole
+  - Configurable policy actions per threat category
+
+### ads-httpproxy Features
+- [ ] Predictive blocking based on related domains
+  - Block domains sharing IP/ASN with known threats
+  - Block domains with similar nameservers
+
+- [ ] Session intelligence tracking
+  - Correlate HTTP requests with DNS lookups
+  - Detect beaconing behavior (C2 callbacks)
+  - Alert on suspicious domain access patterns
+
+- [ ] Enriched logging and reporting
+  - Include threat scores in access logs
+  - Generate threat intelligence reports
+  - Export metrics to Prometheus
+
+## Phase 4: Operational Enhancements
+
+### Deployment
+- [ ] Docker Compose setup for integrated deployment
+  - dnsscienced container
+  - ads-httpproxy container
+  - Shared network configuration
+  - Volume mounts for config/data
+
+- [ ] Kubernetes manifests
+  - Service definitions for gRPC communication
+  - ConfigMaps for threat feed configuration
+  - PersistentVolumes for cache persistence
+
+### Performance
+- [ ] Benchmark gRPC lookup latency vs HTTP API calls
+  - Target: <1ms for cache hits
+  - Measure impact on proxy throughput
+
+- [ ] Implement caching layer in ads-httpproxy
+  - Local threat decision cache (TTL-based)
+  - Reduce gRPC calls for frequent domains
+
+- [ ] Load testing with realistic traffic
+  - Test with 10k+ concurrent connections
+  - Measure cache hit rates and threat detection accuracy
+
+### Monitoring
+- [ ] Add Prometheus metrics for integration
+  - dnsscienced: cache_lookups_total, threat_score_distribution
+  - ads-httpproxy: dns_cache_queries_total, blocked_by_cache_total
+
+- [ ] Create Grafana dashboards
+  - Real-time threat landscape view
+  - Top blocked domains/IPs
+  - Cache performance metrics
+
+## Quick Win: Minimal Viable Integration
+
+Start here for immediate value:
+
+1. **dnsscienced**: Add basic threat_score field to CacheEntry
+2. **ads-httpproxy**: Implement simple gRPC client that calls Lookup() before proxying
+3. **Integration**: Block domains with score > 80
+4. **Testing**: Verify with known malicious test domains
+
+## Future Enhancements
+
+- [ ] Machine learning for threat scoring
+  - Train model on historical threat data
+  - Real-time scoring based on domain features (age, TLD, lexical analysis)
+
+- [ ] Collaborative threat sharing
+  - Share anonymized threat intel between dnsscienced instances
+  - Federated learning for improved detection
+
+- [ ] Integration with SIEM/SOAR platforms
+  - Export threat events to Splunk, ELK, etc.
+  - Trigger automated response workflows
+
+- [ ] Browser extension for threat visualization
+  - Real-time domain reputation overlay
+  - Alert users before visiting malicious sites
+
+## Notes
+
+- Current ads-httpproxy threat manager loads feeds via HTTP API (`threat.Manager.LoadFromDNSScience()`)
+- dnsscienced gRPC server runs on port 8443 by default (configurable)
+- Both projects are Go-based, making integration straightforward
+- Existing gRPC infrastructure in both projects means minimal new dependencies
+
+## References
+
+- dnsscienced cache proto: `api/grpc/proto/cache.proto`
+- dnsscienced cache service: `api/grpc/services/cache.go`
+- ads-httpproxy threat manager: `internal/threat/manager.go`
+- ads-httpproxy gRPC service: `internal/grpc/`
