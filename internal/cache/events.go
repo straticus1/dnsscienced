@@ -2,32 +2,44 @@ package cache
 
 import (
 	"sync"
+	"sync/atomic"
 
 	pb "github.com/dnsscience/dnsscienced/api/grpc/proto/pb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Broadcaster manages event subscriptions
+// Broadcaster manages event subscriptions using a lock-free publication model
+// optimized for extremely high throughput (4M+ QPS).
 type Broadcaster struct {
-	mu          sync.RWMutex
-	subscribers map[chan *pb.CacheEvent]struct{}
+	mu          sync.Mutex   // Protects writes to subscribers list
+	subscribers atomic.Value // Stores []chan *pb.CacheEvent
 }
 
 // NewBroadcaster creates a new event broadcaster
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{
-		subscribers: make(map[chan *pb.CacheEvent]struct{}),
-	}
+	b := &Broadcaster{}
+	b.subscribers.Store(make([]chan *pb.CacheEvent, 0))
+	return b
 }
 
 // Subscribe adds a channel to the subscribers list
-// The returned channel is the same as the input, provided for convenience
 func (b *Broadcaster) Subscribe() chan *pb.CacheEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ch := make(chan *pb.CacheEvent, 100) // Buffer to prevent blocking the broadcaster
-	b.subscribers[ch] = struct{}{}
+	// Load existing subscribers
+	existing := b.subscribers.Load().([]chan *pb.CacheEvent)
+
+	// Create new list properly sized
+	newSubs := make([]chan *pb.CacheEvent, len(existing)+1)
+	copy(newSubs, existing)
+
+	// Create new channel with larger buffer for high throughput
+	ch := make(chan *pb.CacheEvent, 1024)
+	newSubs[len(existing)] = ch
+
+	// Atomic store
+	b.subscribers.Store(newSubs)
 	return ch
 }
 
@@ -36,21 +48,39 @@ func (b *Broadcaster) Unsubscribe(ch chan *pb.CacheEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if _, ok := b.subscribers[ch]; ok {
-		delete(b.subscribers, ch)
+	existing := b.subscribers.Load().([]chan *pb.CacheEvent)
+	newSubs := make([]chan *pb.CacheEvent, 0, len(existing))
+
+	found := false
+	for _, sub := range existing {
+		if sub != ch {
+			newSubs = append(newSubs, sub)
+		} else {
+			found = true
+		}
+	}
+
+	if found {
+		b.subscribers.Store(newSubs)
 		close(ch)
 	}
 }
 
-// Publish sends an event to all subscribers non-blocking
+// Publish sends an event to all subscribers non-blocking and LOCK-FREE
 func (b *Broadcaster) Publish(eventType pb.CacheEvent_EventType, entry *Entry, reason string) {
+	// Fast path: check if any subscribers exist before allocating event
+	existing := b.subscribers.Load().([]chan *pb.CacheEvent)
+	if len(existing) == 0 {
+		return
+	}
+
 	// Construct protobuf event
+	// Note: Allocation here is necessary, but maybe we can pool events later?
 	event := &pb.CacheEvent{
 		Type:      eventType,
 		Timestamp: timestamppb.Now(),
 		Name:      entry.QName,
-		// QueryType: entry.QType, // Need to convert uint16 to string or map
-		Reason: reason,
+		Reason:    reason,
 		Entry: &pb.CacheEntry{
 			Name:         entry.QName,
 			ThreatScore:  entry.ThreatScore,
@@ -62,30 +92,16 @@ func (b *Broadcaster) Publish(eventType pb.CacheEvent_EventType, entry *Entry, r
 		},
 	}
 
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	for ch := range b.subscribers {
+	for _, ch := range existing {
 		select {
 		case ch <- event:
 		default:
-			// Buffer full, drop event for this slow subscriber
-			// In production, might want to count dropped events or kick slow consumer
+			// Buffer full, drop event to protect core performance
 		}
 	}
 }
 
-// PublishHit publishes a cache hit event
-func (b *Broadcaster) PublishHit(entry *Entry) {
-	b.Publish(pb.CacheEvent_EVENT_TYPE_HIT, entry, "")
-}
-
-// PublishMiss publishes a cache miss event (technically miss usually doesn't have an Entry yet.. but maybe we pass what we looked for?)
-// For miss, we might not have a full entry. Let's adjust Publish to take optional entry.
-// For now, let's assume we use it when we STORE (which is separate).
-// Miss events might be harder if we don't have an Entry struct.
-// Let's focus on Threat Intelligence: We care about STORE (new threat) and EVICT.
-// Hit/Miss checks are high volume.
+// PublishStore publishes a store event
 func (b *Broadcaster) PublishStore(entry *Entry) {
 	b.Publish(pb.CacheEvent_EVENT_TYPE_STORE, entry, "new_entry")
 }

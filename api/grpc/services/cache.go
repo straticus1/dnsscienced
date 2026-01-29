@@ -54,16 +54,7 @@ func (s *CacheService) Prefetch(ctx context.Context, in *pb.PrefetchRequest) (*p
 }
 
 func (s *CacheService) WatchCache(req *pb.WatchCacheRequest, stream pb.CacheService_WatchCacheServer) error {
-	// Subscribe to cache events
-	// Note: We need to cast s.Mgr to something that supports Subscribe.
-	// The CacheManager interface in 'ports' might need Update, or we assert type if we know it's *cache.ShardedCache or manager wraps it.
-	// Let's assume s.Mgr is the ShardedCache for this phase or expose Subscribe in interface.
-	// Limitation: 'ports.CacheManager' interface might not have Subscribe yet.
-	// For now, let's assume we can try to cast or we need to update the interface.
-	// To minimize changes, let's check if we can type assert or if we need to update 'ports/interfaces.go'.
-	// Since I cannot see ports/interfaces.go easily right now without looking,
-	// I'll try to cast to an interface that has Subscribe.
-
+	// 1. Cast Manager to Subscriber interface
 	type Subscriber interface {
 		Subscribe() chan *pb.CacheEvent
 		Unsubscribe(chan *pb.CacheEvent)
@@ -74,26 +65,40 @@ func (s *CacheService) WatchCache(req *pb.WatchCacheRequest, stream pb.CacheServ
 		return status.Error(codes.Unimplemented, "Cache manager does not support streaming")
 	}
 
+	// 2. Create subscription
 	ch := sub.Subscribe()
 	defer sub.Unsubscribe(ch)
 
 	ctx := stream.Context()
 
-	// Filter setup
-	// watchedTypes := make(map[pb.CacheEvent_EventType]bool)
-	// for _, t := range req.GetTypes() { ... }
-	// Ideally we parse strings to EventTypes or use the enum if passed as strings?
-	// Proto says 'repeated string types = 1'.
+	// 3. Optimize filters
+	// Pre-calculate filter map for O(1) lookups
+	filterTypes := make(map[pb.CacheEvent_EventType]bool)
+	hasFilter := len(req.GetTypes()) > 0
 
-	// For MVP, stream everything or just filtered by simple logic.
+	if hasFilter {
+		// Map string types to enum
+		for _, tStr := range req.GetTypes() {
+			if tVal, ok := pb.CacheEvent_EventType_value[tStr]; ok {
+				filterTypes[pb.CacheEvent_EventType(tVal)] = true
+			}
+		}
+	}
 
+	// 4. Stream loop
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case event := <-ch:
 			// Apply Filters
-			// TODO: Implement sophisticated filtering based on req
+			if hasFilter && !filterTypes[event.Type] {
+				continue
+			}
+
+			// Optional: Name filter
+			// TODO: Add NameFilter to protobuf definition
+			// if req.GetNameFilter() != "" { ... }
 
 			if err := stream.Send(event); err != nil {
 				return err

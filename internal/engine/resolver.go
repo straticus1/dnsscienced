@@ -144,6 +144,80 @@ func (r *Resolver) Resolve(ctx context.Context, name string, qtype string, class
 	return res, nil
 }
 
+// ResolveRaw performs a DNS query using raw types to avoid unnecessary parsing/allocation.
+// This is the high-performance path for FastUDPServer.
+func (r *Resolver) ResolveRaw(ctx context.Context, name string, qtype uint16, qclass uint16, hasEDNS0 bool) (*ports.ResolveResult, error) {
+	// 1. Normalize name (cheap string op)
+	originalName := dns.Fqdn(name)
+	queryName := originalName
+
+	// Apply 0x20 encoding if enabled (this allocates, but is required for security)
+	if r.Config.Enable0x20 {
+		queryName = Apply0x20Encoding(originalName)
+	}
+
+	// 2. Construct the query message efficiently
+	m := new(dns.Msg)
+	m.SetQuestion(queryName, qtype)
+	m.Question[0].Qclass = qclass
+	m.RecursionDesired = true
+
+	// Add EDNS0 if it was present in original packet OR if we require DNSSEC
+	requestDNSSEC := r.Config.ValidateDNSSEC
+	if hasEDNS0 || requestDNSSEC {
+		m.SetEdns0(4096, requestDNSSEC)
+	}
+
+	// 3. Exchange with upstream
+	// optimization: client.ExchangeContext reuses connections if Transport is configured right
+	in, rtt, err := r.Client.ExchangeContext(ctx, m, r.Config.Upstream)
+	if err != nil {
+		return nil, fmt.Errorf("upstream query failed: %w", err)
+	}
+
+	// 4. Validate 0x20 response
+	if r.Config.Enable0x20 && len(in.Question) > 0 {
+		if !Validate0x20Response(queryName, in.Question[0].Name) {
+			return nil, fmt.Errorf("0x20 validation failed")
+		}
+	}
+
+	// 5. Scrubbing
+	if r.Config.EnableScrubbing {
+		ScrubResponse(in, extractZone(originalName))
+	}
+
+	// 6. DNSSEC Stub
+	if r.Config.ValidateDNSSEC {
+		// Verify AD bit for now
+		if !in.AuthenticatedData {
+			// In Phase 2, this would trigger full validation
+		}
+	}
+
+	// 7. Convert response (Zero-Copy-ish: we reuse the bytes if we packed them? No, upstream gives us struct)
+	// We MUST pack to wire bytes to return to FastUDP, which writes bytes.
+	// FastUDP doesn't need ports.ResolveResult if we just return []byte?
+	// But the interface uses ResolveResult. Let's stick to it for now.
+
+	wire, err := in.Pack()
+	if err != nil {
+		return nil, err
+	}
+
+	res := &ports.ResolveResult{
+		RCode:     int32(in.Rcode),
+		RCodeName: dns.RcodeToString[in.Rcode],
+		Wire:      wire,
+		Meta: map[string]string{
+			"rtt_ms": fmt.Sprintf("%d", rtt.Milliseconds()),
+			"path":   "fast_udp_raw",
+		},
+	}
+
+	return res, nil
+}
+
 // extractZone extracts the parent zone from a FQDN.
 // For "www.example.com." it returns "example.com."
 func extractZone(name string) string {
