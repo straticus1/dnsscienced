@@ -4,9 +4,11 @@ go 1.24.0
 
 require (
 	github.com/dchest/siphash v1.2.3
+	github.com/dnsscience/dnsscienced/dnsasm/go v0.0.0-00010101000000-000000000000
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.18.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/yaml.v3 v3.0.1
@@ -30,3 +32,5 @@ require (
 	golang.org/x/tools v0.40.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 )
+
+replace github.com/dnsscience/dnsscienced/dnsasm/go => ./dnsasm/go
