@@ -1,0 +1,179 @@
+syntax = "proto3";
+
+package dnsscience.v1;
+
+option go_package = "github.com/dnsscience/dnsscienced/api/grpc/proto/pb";
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+// ViewService manages DNS views (split-horizon DNS)
+// Views allow different DNS responses based on query source
+service ViewService {
+  // ListViews returns all configured views
+  rpc ListViews(ListViewsRequest) returns (ListViewsResponse);
+
+  // GetView returns details about a specific view
+  rpc GetView(GetViewRequest) returns (GetViewResponse);
+
+  // CreateView creates a new view
+  rpc CreateView(CreateViewRequest) returns (CreateViewResponse);
+
+  // UpdateView updates view configuration
+  rpc UpdateView(UpdateViewRequest) returns (UpdateViewResponse);
+
+  // DeleteView deletes a view
+  rpc DeleteView(DeleteViewRequest) returns (DeleteViewResponse);
+
+  // MatchClientToView determines which view matches a client
+  rpc MatchClientToView(MatchClientRequest) returns (MatchClientResponse);
+
+  // AttachZoneToView attaches a zone to a view
+  rpc AttachZoneToView(AttachZoneRequest) returns (AttachZoneResponse);
+
+  // DetachZoneFromView removes zone from a view
+  rpc DetachZoneFromView(DetachZoneRequest) returns (DetachZoneResponse);
+}
+
+// View represents a DNS view (split-horizon)
+message View {
+  string name = 1;              // View name (e.g., "internal", "external", "dmz")
+  string description = 2;
+  int32 priority = 3;           // Lower number = higher priority for matching
+  repeated MatchCriteria match_clients = 4;
+  ViewOptions options = 5;
+  repeated string zones = 6;    // Zone names attached to this view
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool enabled = 9;
+}
+
+// Match criteria for view selection
+message MatchCriteria {
+  MatchType type = 1;
+  string value = 2;             // CIDR, ASN, country code, etc.
+  bool negate = 3;              // Negate match (NOT)
+}
+
+enum MatchType {
+  MATCH_TYPE_UNSPECIFIED = 0;
+  MATCH_TYPE_SOURCE_IP = 1;     // Match source IP (CIDR)
+  MATCH_TYPE_SOURCE_NETWORK = 2; // Match source network name
+  MATCH_TYPE_ASN = 3;           // Match ASN
+  MATCH_TYPE_COUNTRY = 4;       // Match GeoIP country
+  MATCH_TYPE_ACL = 5;           // Match named ACL
+  MATCH_TYPE_EDNS_SUBNET = 6;   // Match EDNS client subnet
+  MATCH_TYPE_ANY = 7;           // Match any (default/fallback view)
+}
+
+// View-specific options
+message ViewOptions {
+  bool recursion = 1;           // Allow recursion for this view
+  bool dnssec = 2;              // Enable DNSSEC for this view
+  repeated string forwarders = 3; // Forwarders for this view
+  uint32 cache_size = 4;        // Per-view cache size (MB)
+  uint32 max_cache_ttl = 5;     // Maximum cache TTL
+  uint32 min_cache_ttl = 6;     // Minimum cache TTL
+  bool log_queries = 7;         // Log queries matching this view
+}
+
+message ListViewsRequest {
+  bool include_disabled = 1;
+}
+
+message ListViewsResponse {
+  repeated View views = 1;
+  ResponseMeta meta = 2;
+}
+
+message GetViewRequest {
+  string name = 1;
+}
+
+message GetViewResponse {
+  View view = 1;
+  ViewStats stats = 2;
+  ResponseMeta meta = 3;
+}
+
+message ViewStats {
+  int64 total_queries = 1;
+  int64 cache_hits = 2;
+  int64 cache_misses = 3;
+  int32 attached_zones = 4;
+  google.protobuf.Timestamp last_query = 5;
+}
+
+message CreateViewRequest {
+  string name = 1;
+  string description = 2;
+  int32 priority = 3;
+  repeated MatchCriteria match_clients = 4;
+  ViewOptions options = 5;
+  bool enabled = 6;
+}
+
+message CreateViewResponse {
+  View view = 1;
+  ResponseMeta meta = 2;
+}
+
+message UpdateViewRequest {
+  string name = 1;
+  string description = 2;
+  int32 priority = 3;
+  repeated MatchCriteria match_clients = 4;
+  ViewOptions options = 5;
+  bool enabled = 6;
+}
+
+message UpdateViewResponse {
+  View view = 1;
+  ResponseMeta meta = 2;
+}
+
+message DeleteViewRequest {
+  string name = 1;
+  bool force = 2;  // Force delete even if zones are attached
+}
+
+message DeleteViewResponse {
+  bool success = 1;
+  string message = 2;
+  ResponseMeta meta = 3;
+}
+
+message MatchClientRequest {
+  string client_ip = 1;
+  string client_subnet = 2;  // EDNS client subnet
+  map<string, string> metadata = 3;
+}
+
+message MatchClientResponse {
+  string view_name = 1;
+  View view = 2;
+  MatchCriteria matched_criteria = 3;
+  ResponseMeta meta = 4;
+}
+
+message AttachZoneRequest {
+  string view_name = 1;
+  string zone_name = 2;
+}
+
+message AttachZoneResponse {
+  bool success = 1;
+  string message = 2;
+  ResponseMeta meta = 3;
+}
+
+message DetachZoneRequest {
+  string view_name = 1;
+  string zone_name = 2;
+}
+
+message DetachZoneResponse {
+  bool success = 1;
+  string message = 2;
+  ResponseMeta meta = 3;
+}
